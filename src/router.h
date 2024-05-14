@@ -1,6 +1,7 @@
 #include <iostream>
 #include <cstring>
 #include <map>
+#include "json.hpp"
 
 #include "module.h"
 #include "mst.h"
@@ -21,8 +22,11 @@ public:
 private:
     vector<Block*> blocks;
     vector<Net*> nets;
+    vector<Region*> regions;
     int chipW, chipH;
     map<string, int> blkNameToID;
+    int numBlocks;
+    int numRegions;
 
     vector<vector<int>> wireMap; // wire usage
     vector<vector<int>> obsMap; // indicate if (x, y) is covered by obstacle
@@ -373,24 +377,190 @@ void Router::patternRoute() {
 }
 
 void Router::parseDEF(const char* path) {
-    printf("parseDEF: %s\n", path);
-    FILE *fp = fopen(path, "r");
+    char filePath[200];
+    strcpy(filePath, path);
+    strcat(filePath, "chip_top.def");
+    printf("parseDEF: %s\n", filePath);
+    FILE *fp = fopen(filePath, "r");
     if(fp == NULL) {
-        printf("cannot open %s\n", path);
+        printf("cannot open %s\n", filePath);
         exit(1);
     }
 
     // toy case
-    chipH = 100;
-    chipW = 100;
-    addBlock("X1", 0, 0, 5, 20, true);
-    addBlock("A", 8, 0, 30, 20, true);
-    addBlock("D", 33, 0, 60, 20, true);
-    addBlock("X2", 63, 0, 90, 20, true);
-    addBlock("E", 55, 25, 90, 45, true);
-    addBlock("X3", 0, 25, 50, 80, false);
-    addBlock("F", 57, 50, 85, 80, false);
-    addBlock("B", 60, 85, 70, 95, true);
+    // chipH = 100;
+    // chipW = 100;
+    // addBlock("X1", 0, 0, 5, 20, true);
+    // addBlock("A", 8, 0, 30, 20, true);
+    // addBlock("D", 33, 0, 60, 20, true);
+    // addBlock("X2", 63, 0, 90, 20, true);
+    // addBlock("E", 55, 25, 90, 45, true);
+    // addBlock("X3", 0, 25, 50, 80, false);
+    // addBlock("F", 57, 50, 85, 80, false);
+    // addBlock("B", 60, 85, 70, 95, true);
+    // fclose(fp);
+
+    // parse real benchmark
+    char line[2000];
+    string str;
+    stringstream ss;
+    int unit = 2000;
+    fgets(line, sizeof(line), fp); // VERSION 5.7 ;
+    fgets(line, sizeof(line), fp); // DIVIDERCHAR "/" ;
+    fgets(line, sizeof(line), fp); // BUSBITCHARS "[]" ;
+    fgets(line, sizeof(line), fp); // 
+    fgets(line, sizeof(line), fp); // DESIGN chip_top ;
+    fgets(line, sizeof(line), fp); // 
+    fgets(line, sizeof(line), fp); // UNITS DISTANCE MICRONS 2000 ;
+    fgets(line, sizeof(line), fp); // DIEAREA ( 0 0 ) ( 12440136 10368720 ) ;
+    ss.str(line);
+    ss>> str; // DIEAREA
+    ss>> str; // (
+    ss>> str; // 0
+    ss>> str; // 0
+    ss>> str; // )
+    ss>> str; // (
+    ss>> chipW;  chipW /= unit;
+    ss>> chipH;  chipH /= unit;
+    fgets(line, sizeof(line), fp); // 
+    fgets(line, sizeof(line), fp); // COMPONENTS 78 ;
+    ss.str(line);
+    ss>> str; // COMPONENTS
+    ss>> numBlocks;
+    for(int blkId=0; blkId<numBlocks; blkId++) {
+        fgets(line, sizeof(line), fp); // - BLOCK_0 blk_0 + PLACED ( 3660000 5284000 ) N ;
+        string name, fileName, orient;
+        pair<int, int> offset;
+        vector<pair<int, int>> locations;
+        ss.str(line);
+        ss>> str;      // -
+        ss>> name;     // BLOCK_0
+        ss>> fileName; // blk_0
+        ss>> str;      // +
+        ss>> str;      // PLACED
+        ss>> str;      // (
+        ss>> offset.first;
+        ss>> offset.second;
+        ss>> str;      // )
+        ss>> orient;   // N
+        
+        char blkPath[200];
+        strcpy(blkPath, path);
+        strcat(blkPath, fileName.c_str());
+        strcat(blkPath, ".def");
+        FILE *blkFile = fopen(blkPath, "r");
+        if(blkFile == NULL) {
+            printf("cannot open %s\n", blkPath);
+            exit(1);
+        }
+
+        fgets(line, sizeof(line), blkFile); // VERSION 5.7 ;
+        fgets(line, sizeof(line), blkFile); // DIVIDERCHAR "/" ;
+        fgets(line, sizeof(line), blkFile); // BUSBITCHARS "[]" ;
+        fgets(line, sizeof(line), blkFile); // 
+        fgets(line, sizeof(line), blkFile); // DESIGN blk_0 ;
+        fgets(line, sizeof(line), blkFile); // 
+        fgets(line, sizeof(line), blkFile); // UNITS DISTANCE MICRONS 2000 ;
+        fgets(line, sizeof(line), blkFile); // DIEAREA ( 2060000 1076000 ) ( 1408000 1076000 ) ...
+        fclose(blkFile);
+
+        ss.str(line);
+        ss>> str; // DIEAREA
+        ss>> str; // (
+        pair<pair<int, int>, pair<int, int>> box = make_pair(make_pair(chipW, chipH), make_pair(0, 0));
+        vector<pair<int, int>> points;
+        while(str != ";") {
+            int x, y;
+            ss>> x>> y;
+            points.push_back(make_pair(x, y));
+            if(x < box.first.first) box.first.first = x;
+            if(y < box.first.second) box.first.second = y;
+            if(x > box.second.first) box.second.first = x;
+            if(y > box.second.second) box.second.second = y;
+            ss>> str;
+            ss>> str;
+        }
+        if(points.size() == 2) {
+            pair<int, int> A = points[0];
+            pair<int, int> B = points[1];
+            points.clear();
+            points.push_back(A);
+            points.push_back(make_pair(B.first, A.second));
+            points.push_back(B);
+            points.push_back(make_pair(A.first, B.second));
+        }
+        
+        int X = box.second.first - box.first.first;
+        int Y = box.second.second - box.first.second;
+        for(int pointId=0; pointId<points.size(); pointId++) {
+            int x = points[pointId].first;
+            int y = points[pointId].second;
+            if(orient == "N")
+                locations.push_back(make_pair(offset.first + x,
+                                              offset.second + y));
+            else if(orient == "W")
+                locations.push_back(make_pair(offset.first + Y - y,
+                                              offset.second + x));
+            else if(orient == "S")
+                locations.push_back(make_pair(offset.first + X - x,
+                                              offset.second + Y - y));
+            else if(orient == "E")
+                locations.push_back(make_pair(offset.first + y,
+                                              offset.second + X - x));
+            else if(orient == "FN")
+                locations.push_back(make_pair(offset.first + X - x,
+                                              offset.second + y));
+            else if(orient == "FW")
+                locations.push_back(make_pair(offset.first + y,
+                                              offset.second + x));
+            else if(orient == "FS")
+                locations.push_back(make_pair(offset.first + x,
+                                              offset.second + Y - y));
+            else if(orient == "FE")
+                locations.push_back(make_pair(offset.first + Y - y,
+                                              offset.second + X - x));
+            else
+                printf("error orient: %s\n", orient.c_str());
+        }
+        
+        Block *block = new Block;
+        block->name = name;
+        block->orient = orient;
+        block->offset = offset;
+        block->locations = locations;
+        block->box = box;
+        blocks.push_back(block);
+        blkNameToID[name] = blkId;
+    }
+
+    fgets(line, sizeof(line), fp); // END COMPONENTS
+    fgets(line, sizeof(line), fp); //
+    fgets(line, sizeof(line), fp); //
+    fgets(line, sizeof(line), fp); // REGIONS 216 ;
+    ss.str(line);
+    ss>> str; // REGIONS
+    ss>> numRegions;
+    for(int regionId=0; regionId<numRegions; regionId++) {
+        fgets(line, sizeof(line), fp); // - REGION_0 ( 0 460000 ) ( 659832 2539360 ) ;
+        pair<pair<int, int>, pair<int, int>> box;
+        string name;
+        ss.str(line);
+        ss>> str;      // -
+        ss>> name;     // REGION_0
+        ss>> str;      // (
+        ss>> box.first.first;
+        ss>> box.first.second;
+        ss>> str;      // )
+        ss>> str;      // (
+        ss>> box.second.first;
+        ss>> box.second.second;
+
+        Region *region = new Region;
+        region->name = name;
+        region->box = box;
+        regions.push_back(region);
+        blkNameToID[name] = numBlocks + regionId;
+    }
     fclose(fp);
 }
 
@@ -400,6 +570,25 @@ void Router::parseCFG(const char* path) {
     if(fp == NULL) {
         printf("cannot open %s\n", path);
         exit(1);
+    }
+
+    string json_string;
+    char buf[4096];
+    int bytesRead;
+    while((bytesRead = fread(buf, 1, sizeof(buf), fp)) > 0)
+        json_string.append(buf, bytesRead);
+
+    nlohmann::json j = nlohmann::json::parse(json_string);
+    for(int i=0; i<j.size(); i++) {
+        nlohmann::json jblock = j[i];
+
+        int blkId = blkNameToID[jblock["block_name"]];
+        Block* block = blocks[blkId];
+        block->through_block_net_num = jblock["through_block_net_num"];
+        // jblock["through_block_edge_net_num"]
+        // jblock["block_port_region"]
+        block->is_feedthroughable = (jblock["is_feedthroughable"] == "True");
+        // block->is_tile = (jblock["is_tile"] == "True");
     }
     fclose(fp);
 }
@@ -412,12 +601,53 @@ void Router::parseNet(const char* path) {
         exit(1);
     }
     
-    addNet(0, "A", {"E", "B"}, make_pair(3, 3), {make_pair(15, 6), make_pair(4, 3)});
-    addNet(1, "E", {"A", "D", "B"}, make_pair(0, 6), {make_pair(3, 4), make_pair(7, 10), make_pair(8, 2)});
+    // toy case
+    // addNet(0, "A", {"E", "B"}, make_pair(3, 3), {make_pair(15, 6), make_pair(4, 3)});
+    // addNet(1, "E", {"A", "D", "B"}, make_pair(0, 6), {make_pair(3, 4), make_pair(7, 10), make_pair(8, 2)});
 
-    for(int i=0; i<nets.size(); i++) {
-        Net* net = nets[i];
-        printf("id: %d\n", net->id);
+    string json_string;
+    char buf[4096];
+    int bytesRead;
+    while((bytesRead = fread(buf, 1, sizeof(buf), fp)) > 0)
+        json_string.append(buf, bytesRead);
+
+    nlohmann::json j = nlohmann::json::parse(json_string);
+    int unit = 1;
+    for(int i=0; i<j.size(); i++) {
+        nlohmann::json jnet = j[i];
+
+        int id = jnet["ID"];
+        string TX = jnet["TX"];
+        vector<string> RX = jnet["RX"];
+        int NUM = jnet["NUM"];
+        // jnet["MUST_THROUGH"]
+        // jnet["HMFT_MUST_THROUGH"]
+        pair<double, double> TX_COORD = jnet["TX_COORD"];
+        vector<pair<double, double>> RX_COORD = jnet["RX_COORD"];
+
+        Net *net = new Net;
+        net->id = id;
+        net->pins.clear();
+        int blkID = blkNameToID[TX];
+        if(blkID < numBlocks) 
+            net->pins.push_back(make_pair((blocks[blkID]->offset.first + TX_COORD.first) / unit,
+                                          (blocks[blkID]->offset.second + TX_COORD.second) / unit));
+        else
+            net->pins.push_back(make_pair((regions[blkID - numBlocks]->box.first.first + TX_COORD.first) / unit,
+                                          (regions[blkID - numBlocks]->box.first.second + TX_COORD.second) / unit));
+        
+        for(int k=0; k<RX.size(); k++) {
+            blkID = blkNameToID[RX[k]];
+            if(blkID < numBlocks) 
+                net->pins.push_back(make_pair((blocks[blkID]->offset.first + RX_COORD[k].first) / unit,
+                                              (blocks[blkID]->offset.second + RX_COORD[k].second) / unit));
+            else
+                net->pins.push_back(make_pair((regions[blkID - numBlocks]->box.first.first + RX_COORD[k].first) / unit,
+                                              (regions[blkID - numBlocks]->box.first.second + RX_COORD[k].second) / unit));
+        }
+        nets.push_back(net);
+        
+        // two-pin net decomposition (MST)
         for(int j=0; j<net->pins.size(); j++)
            printf("pins[%d]: %d, %d\n", j, net->pins[j].first, net->pins[j].second);
 
@@ -431,23 +661,41 @@ void Router::parseNet(const char* path) {
     
         int mst_wt = g.kruskalMST(net->twoPinNets);
         for(int j=0; j<net->twoPinNets.size(); j++)
-            printf("%d - %d\n", net->twoPinNets[j]->pinId.first, net->twoPinNets[j]->pinId.second);
+            net->twoPinNets[j]->segments.push_back(make_pair(net->pins[net->twoPinNets[j]->pinId.first], net->pins[net->twoPinNets[j]->pinId.second]));
+            // printf("%d - %d\n", net->twoPinNets[j]->pinId.first, net->twoPinNets[j]->pinId.second);
     }
     fclose(fp);
 }
 
 void Router::printChip(const char* path) {
     FILE *fp = fopen(path, "w");
-    fprintf(fp, "0 0 %d %d\n", chipW, chipH);
+    fprintf(fp, "0 0 %d %d\n", chipW*2000, chipH*2000);
     fprintf(fp, "%d\n", blocks.size());
     for(int i=0; i<blocks.size(); i++) {
         Block* block = blocks[i];
-        fprintf(fp, "%s %d %d %d %d %d\n", block->name.c_str(),
-                                           block->location.first.first,
-                                           block->location.first.second,
-                                           block->location.second.first - block->location.first.first,
-                                           block->location.second.second - block->location.first.second,
-                                           block->is_feedthroughable? 1: 0);
+        // fprintf(fp, "%s\n", block->name.c_str());
+        fprintf(fp, "B%d\n", i);
+        fprintf(fp, "%d\n", block->locations.size());
+        for(int j=0; j<block->locations.size(); j++)
+            fprintf(fp, "%d %d\n", block->locations[j].first, block->locations[j].second);
+        fprintf(fp, "%d\n", block->is_feedthroughable? 1: 0);
+
+        // fprintf(fp, "%s %d %d %d %d %d\n", block->name.c_str(),
+        //                                    block->location.first.first,
+        //                                    block->location.first.second,
+        //                                    block->location.second.first - block->location.first.first,
+        //                                    block->location.second.second - block->location.first.second,
+        //                                    block->is_feedthroughable? 1: 0);
+    }
+
+    fprintf(fp, "%d\n", regions.size());
+    for(int i=0; i<regions.size(); i++) {
+        Region* region = regions[i];
+        fprintf(fp, "R%d\n", i);
+        fprintf(fp, "%d %d %d %d\n", region->box.first.first,
+                                     region->box.first.second,
+                                     region->box.second.first - region->box.first.first,
+                                     region->box.second.second - region->box.first.second);
     }
 
     fprintf(fp, "%d\n", nets.size());

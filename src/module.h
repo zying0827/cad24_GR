@@ -8,6 +8,10 @@ class Block {
 public:
     string name;
     // assume Block is rectangular, otherwise stored as polygon
+    pair<int, int> offset;
+    vector<pair<int, int>> locations;
+    string orient;
+    pair<pair<int, int>, pair<int, int>> box; // ((x1, y1), (x2, y2))
     pair<pair<int, int>, pair<int, int>> location; // ((x1, y1), (x2, y2))
 
     int through_block_net_num;
@@ -15,6 +19,12 @@ public:
     // vector<tuple<pair<int, int>, pair<int, int>, int>> through_block_edge_net_num;
     pair<pair<int, int>, pair<int, int>> block_port_region;
     bool is_feedthroughable;
+};
+
+class Region {
+public:
+    string name;
+    pair<pair<int, int>, pair<int, int>> box; // ((x1, y1), (x2, y2))
 };
 
 class TwoPinNet {
